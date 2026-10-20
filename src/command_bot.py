@@ -101,7 +101,6 @@ def build_command_responses(
 
 
 def _send_responses(bot_token: str, chat_id: str, responses: list[str]) -> None:
-    None:
     logger.info("Chat ID: %s", chat_id)
     for response in responses:
         result = send_message(bot_token, chat_id, response)
