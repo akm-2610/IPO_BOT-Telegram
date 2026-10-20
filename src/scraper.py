@@ -5,7 +5,7 @@ import time
 from datetime import date, datetime, timedelta
 from difflib import SequenceMatcher
 from urllib.parse import urlsplit, urlunsplit
-from zoneinfo import ZoneInfo
+from datetime import timezone, timedelta
 
 import httpx
 from bs4 import BeautifulSoup, Tag
@@ -19,7 +19,7 @@ USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
 )
-IST = ZoneInfo("Asia/Kolkata")
+IST = timezone(timedelta(hours=5, minutes=30))
 CLOSE_WITHIN_DAYS = 4
 
 _MONTHS = {
