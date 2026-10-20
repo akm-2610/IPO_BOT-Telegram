@@ -1,0 +1,17 @@
+services:
+  ipo-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ipo-telegram-bot:local
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    command: ["python", "-m", "src.command_bot"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import src.command_bot, src.config"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
