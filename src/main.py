@@ -26,6 +26,9 @@ def run() -> int:
 
     try:
         messages = build_digest(config.min_gain_pct)
+        if not messages:
+            logger.info("No qualifying IPO alert; no Telegram message sent")
+            return 0
         for message in messages:
             send_message(config.telegram_bot_token, config.telegram_channel_id, message)
         logger.info("Posted %s Telegram message(s)", len(messages))

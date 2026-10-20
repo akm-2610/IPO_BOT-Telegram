@@ -62,3 +62,30 @@ def send_message(
         },
         timeout=timeout,
     )
+
+
+def get_updates(
+    bot_token: str,
+    *,
+    offset: int | None = None,
+    timeout: int = 25,
+) -> list[dict[str, Any]]:
+    """Long-poll Telegram for new message updates."""
+    if not 0 <= timeout <= 50:
+        raise ValueError("Telegram long-poll timeout must be between 0 and 50 seconds")
+    payload: dict[str, Any] = {
+        "timeout": timeout,
+        "allowed_updates": ["message"],
+    }
+    if offset is not None:
+        payload["offset"] = offset
+    data = _api_call(
+        bot_token,
+        "getUpdates",
+        payload=payload,
+        timeout=timeout + 10,
+    )
+    updates = data.get("result")
+    if not isinstance(updates, list) or not all(isinstance(item, dict) for item in updates):
+        raise TelegramError("Telegram returned an invalid updates payload")
+    return updates

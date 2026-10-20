@@ -90,6 +90,8 @@ def _name(record: IpoRecord) -> str:
 
 
 def _verdict(label: str) -> str:
+    if label == "HIGH SIGNAL":
+        return "🚨 HIGH SIGNAL"
     if label == "CONSIDER":
         return "Apply"
     if label == "WATCH":
@@ -254,7 +256,9 @@ def format_digest(
 ) -> list[str]:
     now = now or datetime.now(IST)
     today = now.date()
-    actionable = bool(signals and signals[0].label == "CONSIDER")
+    actionable = any(
+        signal.label in {"CONSIDER", "HIGH SIGNAL"} for signal in signals
+    )
     title = "Today's IPO pick" if actionable else "No clear IPO to apply today"
     header = f"<b>{title} — {_format_day(today)}</b>"
     if actionable:
@@ -293,4 +297,105 @@ def format_digest(
             f"{current[-1]}{footer}{disclaimer}"
         )
     messages.append(last)
+    return messages
+
+
+def format_command_response(
+    title: str,
+    signals: list[SignalResult],
+    now: datetime | None = None,
+    *,
+    details: bool = False,
+    gmp_only: bool = False,
+) -> list[str]:
+    now = now or datetime.now(IST)
+    display_title = title if len(title) <= 180 else title[:177].rstrip() + "…"
+    header = f"<b>{escape(display_title)} — {_format_day(now.date())}</b>"
+    if not signals:
+        return [f"{header}\n\nNo matching IPOs found."]
+
+    messages: list[str] = []
+    current = [header]
+    for index, result in enumerate(signals, start=1):
+        ipo = result.ipo
+        if gmp_only:
+            block = "\n".join(
+                (
+                    f"<b>{_name(ipo)}</b> · {escape(ipo.ipo_type)} · {escape(ipo.status)}",
+                    (
+                        f"GMP {_money(ipo.gmp_rs)} "
+                        f"({(ipo.gain_pct or 0):.1f}%) · {_trend_word(ipo.trend)}"
+                    ),
+                    f"Open {_date(ipo.open_date)} → Close {_date(ipo.close_date)}",
+                )
+            )
+            if ipo.subscription:
+                block += (
+                    "\nDemand: "
+                    f"QIB {_times(ipo.subscription.qib)} · "
+                    f"retail {_times(ipo.subscription.retail)} · "
+                    f"overall {_times(ipo.subscription.total)}"
+                )
+        else:
+            block = "\n".join(
+                (
+                    f"<b>{index}. {_name(ipo)}</b> · {escape(ipo.ipo_type)}",
+                    (
+                        f"Status: {escape(ipo.status)} · "
+                        f"Open {_date(ipo.open_date)} → Close {_date(ipo.close_date)}"
+                    ),
+                    (
+                        f"GMP {_money(ipo.gmp_rs)} "
+                        f"({(ipo.gain_pct or 0):.1f}%) · "
+                        f"Strength {result.score:.0f}/100 · "
+                        f"{escape(_verdict(result.label))}"
+                    ),
+                )
+            )
+            if ipo.price_high is not None:
+                block += (
+                    f"\nIssue price {_money(ipo.price_high)}"
+                    f" → if listed near GMP {_money(ipo.estimated_listing)}"
+                )
+            if ipo.subscription:
+                block += (
+                    "\nDemand: "
+                    f"QIB {_times(ipo.subscription.qib)} · "
+                    f"HNI {_times(ipo.subscription.nii)} · "
+                    f"retail {_times(ipo.subscription.retail)} · "
+                    f"overall {_times(ipo.subscription.total)}"
+                )
+            if details and ipo.details:
+                detail_lines: list[str] = []
+                if ipo.details.min_application is not None:
+                    detail_lines.append(f"Minimum application {_money(ipo.details.min_application)}")
+                if ipo.details.issue_size:
+                    detail_lines.append(f"Issue size {escape(ipo.details.issue_size[:200])}")
+                if ipo.details.listing_venue:
+                    detail_lines.append(f"Listing venue {escape(ipo.details.listing_venue[:120])}")
+                if ipo.details.listing_date:
+                    detail_lines.append(f"Listing date {_date(ipo.details.listing_date)}")
+                valuation = _value_line(ipo)
+                if valuation:
+                    detail_lines.append(valuation)
+                if detail_lines:
+                    block += "\n" + "\n".join(detail_lines)
+            if (
+                ipo.url
+                and len(ipo.url) <= 500
+                and ipo.url.startswith(("https://", "http://"))
+            ):
+                block += f'\n<a href="{escape(ipo.url, quote=True)}">Source details</a>'
+
+        candidate = "\n\n".join(current + [block])
+        if len(candidate) > 3800 and len(current) > 1:
+            messages.append("\n\n".join(current))
+            current = [f"<b>{escape(display_title)} — more</b>", block]
+        else:
+            current.append(block)
+
+    message = "\n\n".join(current)
+    if len(message) > 4096:
+        raise ValueError("A command response exceeds Telegram's message limit")
+    messages.append(message)
     return messages

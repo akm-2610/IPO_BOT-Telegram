@@ -3,9 +3,9 @@
 [![Tests](https://github.com/HarshBoricha404/TelegramBot/actions/workflows/tests.yml/badge.svg)](https://github.com/HarshBoricha404/TelegramBot/actions/workflows/tests.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A free, deterministic Indian IPO signal bot. It validates current grey-market data, ranks actionable IPOs, and posts one daily Telegram update at **9:00 AM IST** using GitHub Actions.
+A free, deterministic Indian IPO signal bot. It validates current grey-market data, ranks actionable IPOs, posts qualifying alerts at **9:00 AM IST** using GitHub Actions, and supports interactive Telegram commands from a separate long-polling process.
 
-It uses no paid API, AI model, database, browser automation, or always-on server.
+It uses no paid API, AI model, database, or browser automation. Scheduled alert mode needs no always-on server; interactive commands run as a separate long-polling process on an always-on host.
 
 ## Run your own bot
 
@@ -45,6 +45,24 @@ Environment secrets are not shared with forks or pull requests.
 
 The scheduled workflow runs daily at `30 3 * * *` UTC, which is **9:00 AM IST**. GitHub schedules can be delayed. GitHub may disable schedules in inactive public repositories after 60 days; re-enable the workflow from the Actions page if needed.
 
+## Interactive Telegram commands
+
+The scheduled GitHub Actions job is one-shot and cannot receive commands between runs. To enable commands, start the separate long-polling process on an always-on host using the same `TELEGRAM_BOT_TOKEN`:
+
+```bash
+python -m src.command_bot
+```
+
+The listener replies to the chat that sent the command and supports:
+
+- `/highsignal` — all HIGH SIGNAL IPOs
+- `/today` — IPOs closing today
+- `/upcoming` — upcoming IPOs
+- `/search <IPO_NAME>` — matching IPO details
+- `/gmp` — active IPO GMP data
+
+Keep this process running independently of the scheduled workflow. Run only one long-polling process for a bot token, and do not configure a webhook for that same bot while using polling. The listener uses the bot token and `MIN_GAIN_PCT`; it does not require `TELEGRAM_CHANNEL_ID`.
+
 ## What it checks
 
 Primary sources:
@@ -64,8 +82,11 @@ The bot never averages unofficial GMP values. A material source disagreement low
 Only an IPO that is **open today**, **closes today or within the next 4 days**, has fresh and parseable data, positive GMP, and meets `MIN_GAIN_PCT` can receive `CONSIDER`.
 
 - `CONSIDER`: actionable open IPO closing within 4 days, with signal score at least 60
+- `HIGH SIGNAL`: an open IPO closing today with at least 20% GMP gain, QIB subscription of 5x, retail subscription of 2x, overall subscription of 10x, and a score of at least 60
 - `WATCH`: stale/disputed, below the strong threshold, or still open but closing later
 - `LOW SIGNAL`: non-positive GMP or weak/conflicting evidence
+
+HIGH SIGNAL is an additional label; it does not change the score calculation. The scheduled alert is silent unless at least one IPO is `CONSIDER` or `HIGH SIGNAL`.
 
 The 0–100 signal score now follows a listing-gain checklist, not “highest GMP wins”:
 
@@ -134,6 +155,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before making a larger scoring or
 - `src/formatter.py` — safe Telegram HTML
 - `src/digest.py` — pipeline orchestration
 - `src/main.py` — one-shot entry point used by GitHub Actions
+- `src/command_bot.py` — long-polling entry point for Telegram commands
 - `tests/` — offline parser, scoring, and formatter tests
 
 ## Disclaimer

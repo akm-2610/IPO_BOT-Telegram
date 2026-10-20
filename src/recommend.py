@@ -350,7 +350,21 @@ def score_ipo(
         and not critical_risk
     )
 
-    if actionable and score >= CONSIDER_SCORE:
+    subscription = record.subscription
+    high_signal_alert = (
+        open_today
+        and record.close_date == today
+        and gain >= 20
+        and subscription is not None
+        and (subscription.qib or 0) >= 5
+        and (subscription.retail or 0) >= 2
+        and (subscription.total or 0) >= 10
+        and score >= CONSIDER_SCORE
+    )
+
+    if high_signal_alert:
+        label = "HIGH SIGNAL"
+    elif actionable and score >= CONSIDER_SCORE:
         label = "CONSIDER"
     elif gain <= 0:
         label = "LOW SIGNAL"
@@ -400,9 +414,13 @@ def recommend_ipos(
     *,
     now: datetime | None = None,
     limit: int = 3,
+    include_all: bool = False,
 ) -> list[SignalResult]:
     now = now or datetime.now(IST)
     results = [score_ipo(record, min_gain_pct, now=now) for record in records]
+    if include_all:
+        return sorted(results, key=lambda result: result.score, reverse=True)
+
     relevant = [
         result
         for result in results
@@ -413,7 +431,11 @@ def recommend_ipos(
     ]
     relevant.sort(key=lambda result: result.score, reverse=True)
 
-    consider = [result for result in relevant if result.label == "CONSIDER"]
+    consider = [
+        result
+        for result in relevant
+        if result.label in {"CONSIDER", "HIGH SIGNAL"}
+    ]
     mainboard = [result for result in consider if result.ipo.ipo_type == "Mainboard"]
     sme = [result for result in consider if result.ipo.ipo_type == "SME"]
     selected: SignalResult | None = None
@@ -428,4 +450,10 @@ def recommend_ipos(
     if selected:
         ordered.append(selected)
     ordered.extend(result for result in relevant if result is not selected)
-    return ordered[:limit]
+    limited = ordered[:limit]
+    limited.extend(
+        result
+        for result in relevant
+        if result.label == "HIGH SIGNAL" and result not in limited
+    )
+    return limited

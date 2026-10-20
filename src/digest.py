@@ -11,4 +11,6 @@ def build_digest(min_gain_pct: float, *, now: datetime | None = None) -> list[st
     now = now or datetime.now(IST)
     records = scrape_market_data(now=now)
     signals = recommend_ipos(records, min_gain_pct=min_gain_pct, now=now)
+    if not any(signal.label in {"CONSIDER", "HIGH SIGNAL"} for signal in signals):
+        return []
     return format_digest(signals, min_gain_pct=min_gain_pct, now=now)
