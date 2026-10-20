@@ -7,16 +7,24 @@ import pytest
 
 from src.models import IpoRecord, finalize_ipo_record
 from src.scraper import (
+    CHITTORGARH_DASHBOARD_URL,
+    GMP_URL,
     IST,
+    INVESTORGAIN_SUBSCRIPTION_URL,
+    PREMIUM_URL,
+    SUBSCRIPTION_URL,
     ScrapeError,
     closing_soon_candidates,
     normalize_name,
+    parse_chittorgarh_subscription_html,
     parse_date_range,
     parse_detail_html,
     parse_gmp_performance,
+    parse_investorgain_subscription_html,
     parse_ipowatch_gmp_html,
     parse_premium_html,
     parse_subscription_html,
+    scrape_market_data,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -116,6 +124,112 @@ def test_subscription_parser_uses_page_date_for_time_only_timestamp() -> None:
 
     assert (item.qib, item.nii, item.retail, item.total) == (1.17, 15.95, 10.85, 9.18)
     assert item.updated_at == datetime(2026, 9, 11, 12, 15, tzinfo=IST)
+
+
+def test_subscription_parser_rejects_rows_without_subscription_values() -> None:
+    html = """
+    <table>
+      <tr><th>IPO</th><th>QIB (X)</th><th>NII (X)</th>
+          <th>Retail (X)</th><th>Total (X)</th></tr>
+      <tr><td>Rentomojo</td><td></td><td></td><td></td><td></td></tr>
+    </table>
+    """
+
+    with pytest.raises(ScrapeError):
+        parse_subscription_html(html)
+
+
+def test_investorgain_subscription_parser_maps_categories_and_timestamp() -> None:
+    now = datetime(2026, 9, 11, 13, 0, tzinfo=IST)
+    values = parse_investorgain_subscription_html(
+        fixture("investorgain_subscription.html"),
+        now=now,
+    )
+    item = values[normalize_name("Rentomojo IPO")]
+
+    assert (item.qib, item.nii, item.retail, item.total) == (4.71, 1.45, 0.77, 3.1)
+    assert item.updated_at == datetime(2026, 9, 11, 12, 15, tzinfo=IST)
+
+
+def test_chittorgarh_subscription_parser_accepts_partial_dashboard_data() -> None:
+    now = datetime(2026, 9, 11, 13, 0, tzinfo=IST)
+    values = parse_chittorgarh_subscription_html(
+        fixture("chittorgarh_dashboard.html"),
+        now=now,
+    )
+    item = values[normalize_name("Rentomojo")]
+
+    assert (item.qib, item.nii, item.retail, item.total) == (None, None, None, 3.2)
+    assert item.updated_at == datetime(2026, 9, 11, 12, 40, tzinfo=IST)
+
+
+def test_scrape_market_data_falls_back_to_investorgain_subscription(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 11, 13, 0, tzinfo=IST)
+    requests: list[str] = []
+    pages = {
+        GMP_URL: fixture("gmp_new.html"),
+        PREMIUM_URL: fixture("premium.html"),
+        SUBSCRIPTION_URL: """
+            <table>
+              <tr><th>IPO</th><th>QIB (X)</th><th>NII (X)</th>
+                  <th>Retail (X)</th><th>Total (X)</th></tr>
+              <tr><td>Rentomojo</td><td></td><td></td><td></td><td></td></tr>
+            </table>
+        """,
+        INVESTORGAIN_SUBSCRIPTION_URL: fixture("investorgain_subscription.html"),
+        CHITTORGARH_DASHBOARD_URL: fixture("chittorgarh_dashboard.html"),
+    }
+
+    def fake_fetch(url: str) -> str:
+        requests.append(url)
+        return pages[url]
+
+    monkeypatch.setattr("src.scraper.fetch_html", fake_fetch)
+    monkeypatch.setattr("src.scraper.closing_soon_candidates", lambda records, today: [])
+
+    records = scrape_market_data(now=now)
+    rentomojo = next(record for record in records if record.name == "Rentomojo")
+
+    assert rentomojo.source == "IPO Watch"
+    assert rentomojo.gmp_rs == 138
+    assert rentomojo.subscription is not None
+    assert rentomojo.subscription.total == 3.1
+    assert INVESTORGAIN_SUBSCRIPTION_URL in requests
+    assert CHITTORGARH_DASHBOARD_URL in requests
+    assert requests.index(INVESTORGAIN_SUBSCRIPTION_URL) < requests.index(CHITTORGARH_DASHBOARD_URL)
+
+
+def test_scrape_market_data_falls_back_to_chittorgarh_after_invalid_pages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = datetime(2026, 9, 11, 13, 0, tzinfo=IST)
+    requests: list[str] = []
+    pages = {
+        GMP_URL: fixture("gmp_new.html"),
+        PREMIUM_URL: fixture("premium.html"),
+        SUBSCRIPTION_URL: "<html><body>changed layout</body></html>",
+        INVESTORGAIN_SUBSCRIPTION_URL: "<html><body>no subscription data</body></html>",
+        CHITTORGARH_DASHBOARD_URL: fixture("chittorgarh_dashboard.html"),
+    }
+
+    def fake_fetch(url: str) -> str:
+        requests.append(url)
+        return pages[url]
+
+    monkeypatch.setattr("src.scraper.fetch_html", fake_fetch)
+    monkeypatch.setattr("src.scraper.closing_soon_candidates", lambda records, today: [])
+
+    records = scrape_market_data(now=now)
+    rentomojo = next(record for record in records if record.name == "Rentomojo")
+
+    assert rentomojo.source == "IPO Watch"
+    assert rentomojo.subscription is not None
+    assert rentomojo.subscription.total == 3.2
+    assert rentomojo.subscription.qib is None
+    assert requests.index(SUBSCRIPTION_URL) < requests.index(INVESTORGAIN_SUBSCRIPTION_URL)
+    assert requests.index(INVESTORGAIN_SUBSCRIPTION_URL) < requests.index(CHITTORGARH_DASHBOARD_URL)
 
 
 def test_premium_fallback_derives_status_and_gain() -> None:

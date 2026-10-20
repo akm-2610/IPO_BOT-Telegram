@@ -53,13 +53,20 @@ The scheduled GitHub Actions job is one-shot and cannot receive commands between
 python -m src.command_bot
 ```
 
-The listener replies to the chat that sent the command and supports:
+The listener replies to the chat that sent the command and registers these commands in Telegram's command menu:
 
-- `/highsignal` — all HIGH SIGNAL IPOs
-- `/today` — IPOs closing today
-- `/upcoming` — upcoming IPOs
-- `/search <IPO_NAME>` — matching IPO details
-- `/gmp` — active IPO GMP data
+- `/start`, `/help` — welcome and command help
+- `/date` — current date
+- `/search <IPO_NAME>`, `/details <IPO_NAME>` — search IPOs and view available company details
+- `/live_sme`, `/live_mainboard` — open IPOs by category
+- `/upcoming_sme`, `/upcoming_mainboard` — upcoming IPOs by category
+- `/ending_sme_today`, `/ending_mainboard_today`, `/ending_all_today` — IPOs closing today
+- `/allotment_sme`, `/allotment_mainboard`, `/allotment_awaited_sme`, `/allotment_awaited_mainboard` — allotment status
+- `/listed_sme`, `/listed_mainboard` — listed IPOs by category
+- `/mystats` — your command usage since the listener started; these counters reset when it restarts
+- `/highsignal`, `/today`, `/upcoming`, `/gmp` — existing signal and market-data commands
+
+Live and upcoming filters use the configured market-data sources. Allotment and already-listed IPOs are not currently included in those feeds, so their commands respond that the data is unavailable rather than reporting a misleading empty list. `/details` can show only records present in the market feed and detail fields verified by the scraper.
 
 Keep this process running independently of the scheduled workflow. Run only one long-polling process for a bot token, and do not configure a webhook for that same bot while using polling. The listener uses the bot token and `MIN_GAIN_PCT`; it does not require `TELEGRAM_CHANNEL_ID`.
 
@@ -68,12 +75,14 @@ Keep this process running independently of the scheduled workflow. Run only one 
 Primary sources:
 
 - [IPO Watch live GMP](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/) for Mainboard/SME type, GMP, trend, price, estimated listing gain, status, and timestamps
-- [IPO Watch subscription status](https://ipowatch.in/ipo-subscription-status-today/) for QIB, NII, retail, and total demand
+- [IPO Watch subscription status](https://ipowatch.in/ipo-subscription-status-today/) for QIB, NII, retail, and total demand; primary subscription source
+- [InvestorGain live IPO subscription](https://www.investorgain.com/report/ipo-subscription-live/333/all/) for subscription fallback values by investor category
+- [Chittorgarh IPO dashboard](https://www.chittorgarh.com/ipo/ipo_dashboard.asp) as the final subscription fallback when its dashboard has a matching row; it may provide total subscription only
 - IPO Watch detail pages for every closing-soon candidate: issue size, lot/application amount, listing venue, annual revenue/PAT, EPS/NAV, peer P/E, promoter holding, and objects of the issue
 
 - IPO Watch [GMP vs listing history](https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/) to dampen rich premiums when recent IPOs listed below GMP
 
-[IPO Premium](https://www.ipopremium.in/) is used to cross-check top GMP values and as a fallback when IPO Watch cannot be parsed.
+[IPO Premium](https://www.ipopremium.in/) is used to cross-check top GMP values and as a fallback when IPO Watch cannot be parsed. The bot falls back between sources by data type: a subscription failure does not replace or discard valid IPO Watch GMP rows.
 
 The bot never averages unofficial GMP values. A material source disagreement lowers confidence.
 
@@ -144,6 +153,7 @@ Please read [CONTRIBUTING.md](CONTRIBUTING.md) before making a larger scoring or
 - Network timeouts, HTTP 429, and server errors receive bounded retries.
 - Unexpected/stale page layouts fail closed instead of producing a confident pick.
 - If both GMP sources fail, the bot attempts a short Telegram operational alert and the Actions job exits non-zero.
+- Subscription data is tried in order from IPO Watch, InvestorGain, then Chittorgarh. If no source has matching valid data, the affected IPO is marked with a subscription-unavailable warning; this does not fail an otherwise valid GMP update.
 - Telegram messages use escaped HTML and stay below the 4096-character limit.
 - Tokens are never included in source URLs, logs, or error messages.
 

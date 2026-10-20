@@ -89,3 +89,12 @@ def get_updates(
     if not isinstance(updates, list) or not all(isinstance(item, dict) for item in updates):
         raise TelegramError("Telegram returned an invalid updates payload")
     return updates
+
+
+def set_my_commands(bot_token: str, commands: list[dict[str, str]]) -> None:
+    """Register the command menu shown in Telegram clients."""
+    _api_call(
+        bot_token,
+        "setMyCommands",
+        payload={"commands": commands},
+    )

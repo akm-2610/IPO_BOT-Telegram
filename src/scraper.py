@@ -14,6 +14,8 @@ from src.models import GmpCalibration, IpoDetails, IpoRecord, SubscriptionData, 
 
 GMP_URL = "https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/"
 SUBSCRIPTION_URL = "https://ipowatch.in/ipo-subscription-status-today/"
+INVESTORGAIN_SUBSCRIPTION_URL = "https://www.investorgain.com/report/ipo-subscription-live/333/all/"
+CHITTORGARH_DASHBOARD_URL = "https://www.chittorgarh.com/ipo/ipo_dashboard.asp"
 PREMIUM_URL = "https://www.ipopremium.in/"
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
@@ -103,6 +105,14 @@ def _canonical_header(text: str) -> str:
         return "status"
     if "last updated" in value or value == "updated":
         return "updated"
+    if (
+        value == "subscription"
+        or value.startswith("subscription ")
+        or value.startswith("total subscription")
+    ):
+        return "total"
+    if value.startswith("rii"):
+        return "retail"
     if value == "open":
         return "open"
     if value == "close" or "closing date" in value:
@@ -489,7 +499,7 @@ def parse_subscription_html(
             timestamp_date = page_date
             if closing and closing < now.date():
                 timestamp_date = closing
-            result[normalize_name(name)] = SubscriptionData(
+            item = SubscriptionData(
                 qib=_number(_value(cells, headers, "qib")),
                 nii=_number(_value(cells, headers, "nii")),
                 retail=_number(_value(cells, headers, "retail")),
@@ -500,9 +510,89 @@ def parse_subscription_html(
                     timestamp_date,
                 ),
             )
+            if any(value is not None for value in (item.qib, item.nii, item.retail, item.total)):
+                result[normalize_name(name)] = item
         if result:
             return result
     raise ScrapeError("IPO Watch subscription table was missing or empty")
+
+
+def _source_row_name(cells: list[Tag]) -> str:
+    if not cells:
+        return ""
+    link = cells[0].find("a")
+    return _cell_text(link) if isinstance(link, Tag) else _cell_text(cells[0])
+
+
+def _parse_source_updated_at(text: str, now: datetime) -> datetime | None:
+    normalized = re.sub(r"(?<=\d)(?:st|nd|rd|th)\b", "", text, flags=re.I)
+    return parse_updated_at(normalized, now)
+
+
+def parse_investorgain_subscription_html(
+    html: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, SubscriptionData]:
+    now = now or datetime.now(IST)
+    soup = BeautifulSoup(html, "lxml")
+    required = {"name", "qib", "nii", "retail", "total"}
+    for table in soup.find_all("table"):
+        headers, header_row = _table_headers(table)
+        if not header_row or not required.issubset(headers):
+            continue
+        result: dict[str, SubscriptionData] = {}
+        for row in table.find_all("tr"):
+            if row is header_row:
+                continue
+            cells = row.find_all(["td", "th"], recursive=False)
+            name = _source_row_name(cells)
+            if not name:
+                continue
+            total_text = _value(cells, headers, "total")
+            item = SubscriptionData(
+                qib=_number(_value(cells, headers, "qib")),
+                nii=_number(_value(cells, headers, "nii")),
+                retail=_number(_value(cells, headers, "retail")),
+                total=_number(total_text),
+                updated_at=_parse_source_updated_at(total_text, now),
+            )
+            if any(value is not None for value in (item.qib, item.nii, item.retail, item.total)):
+                result[normalize_name(name)] = item
+        if result:
+            return result
+    raise ScrapeError("InvestorGain subscription table was missing or empty")
+
+
+def parse_chittorgarh_subscription_html(
+    html: str,
+    *,
+    now: datetime | None = None,
+) -> dict[str, SubscriptionData]:
+    now = now or datetime.now(IST)
+    soup = BeautifulSoup(html, "lxml")
+    for table in soup.find_all("table"):
+        headers, header_row = _table_headers(table)
+        if not header_row or not {"name", "total"}.issubset(headers):
+            continue
+        result: dict[str, SubscriptionData] = {}
+        for row in table.find_all("tr"):
+            if row is header_row:
+                continue
+            cells = row.find_all(["td", "th"], recursive=False)
+            name = _source_row_name(cells)
+            if not name:
+                continue
+            total = _number(_value(cells, headers, "total"))
+            if total is None:
+                continue
+            result[normalize_name(name)] = SubscriptionData(
+                total=total,
+                updated_at=_parse_source_updated_at(_value(cells, headers, "updated"), now),
+            )
+        if result:
+            return result
+    raise ScrapeError("Chittorgarh subscription table was missing or empty")
 
 
 def parse_premium_html(
@@ -945,6 +1035,8 @@ def _attach_subscription(
     subscriptions: dict[str, SubscriptionData],
 ) -> None:
     for record in records:
+        if record.subscription is not None:
+            continue
         match = _match_by_name(record.name, subscriptions)
         if isinstance(match, SubscriptionData):
             record.subscription = match
@@ -1020,11 +1112,21 @@ def scrape_market_data(*, now: datetime | None = None) -> list[IpoRecord]:
         for record in records:
             record.gmp_calibration = calibration
 
-    try:
-        subscriptions = parse_subscription_html(fetch_html(SUBSCRIPTION_URL), now=now)
-        _attach_subscription(records, subscriptions)
-    except (ScrapeError, httpx.HTTPError):
-        for record in records:
+    subscription_sources = (
+        (SUBSCRIPTION_URL, parse_subscription_html),
+        (INVESTORGAIN_SUBSCRIPTION_URL, parse_investorgain_subscription_html),
+        (CHITTORGARH_DASHBOARD_URL, parse_chittorgarh_subscription_html),
+    )
+    for subscription_url, parser in subscription_sources:
+        if all(record.subscription is not None for record in records):
+            break
+        try:
+            subscriptions = parser(fetch_html(subscription_url), now=now)
+            _attach_subscription(records, subscriptions)
+        except (ScrapeError, httpx.HTTPError):
+            continue
+    for record in records:
+        if record.subscription is None:
             record.warnings.append("subscription data unavailable")
 
     if primary and premium:

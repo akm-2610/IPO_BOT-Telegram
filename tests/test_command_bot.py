@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+from collections import Counter
 
 import pytest
 
@@ -12,7 +13,7 @@ from src.main import run
 from src.models import IpoDetails, IpoRecord, SubscriptionData
 from src.recommend import CONSIDER_SCORE, recommend_ipos, score_ipo
 from src.scraper import IST
-from src.telegram_client import TelegramError, get_updates
+from src.telegram_client import TelegramError, get_updates, set_my_commands
 
 NOW = datetime(2026, 9, 11, 9, 0, tzinfo=IST)
 
@@ -168,6 +169,85 @@ def test_command_filters_return_requested_ipo_sets() -> None:
     assert "Closed IPO" not in gmp_text
 
 
+def test_added_commands_filter_by_type_and_phase() -> None:
+    records = [
+        ipo("Live SME", status="Open"),
+        ipo("Live Mainboard"),
+        ipo(
+            "Upcoming SME",
+            status="Upcoming",
+            open_date=date(2026, 9, 15),
+            close_date=date(2026, 9, 17),
+        ),
+        ipo("Ending Today"),
+        ipo(
+            "Awaiting SME",
+            status="Allotment awaited",
+            open_date=date(2026, 9, 1),
+            close_date=date(2026, 9, 3),
+        ),
+        ipo(
+            "Listed Mainboard",
+            status="Listed",
+            open_date=date(2026, 8, 1),
+            close_date=date(2026, 8, 3),
+        ),
+    ]
+    records[0].ipo_type = "SME"
+    records[2].ipo_type = "SME"
+    records[3].close_date = NOW.date()
+    records[4].ipo_type = "SME"
+
+    live_sme = "\n".join(build_command_responses("/live_sme", records, 10, now=NOW))
+    upcoming_sme = "\n".join(
+        build_command_responses("/upcoming_sme", records, 10, now=NOW)
+    )
+    ending_mainboard = "\n".join(
+        build_command_responses("/ending_mainboard_today", records, 10, now=NOW)
+    )
+    ending_all = "\n".join(
+        build_command_responses("/ending_all_today", records, 10, now=NOW)
+    )
+    awaiting_sme = "\n".join(
+        build_command_responses("/allotment_awaited_sme", records, 10, now=NOW)
+    )
+    listed_mainboard = "\n".join(
+        build_command_responses("/listed_mainboard", records, 10, now=NOW)
+    )
+
+    assert "Live SME" in live_sme and "Live Mainboard" not in live_sme
+    assert "Upcoming SME" in upcoming_sme
+    assert "Ending Today" in ending_mainboard
+    assert "Ending Today" in ending_all
+    assert "Awaiting SME" in awaiting_sme
+    assert "Listed Mainboard" in listed_mainboard
+
+
+def test_static_commands_and_usage_stats_do_not_require_market_data() -> None:
+    assert "/live_sme" in build_command_responses("/start", [], 10, now=NOW)[0]
+    assert "11 September 2026" in build_command_responses("/date", [], 10, now=NOW)[0]
+    assert "No commands used yet" in build_command_responses("/mystats", [], 10, now=NOW)[0]
+    stats = Counter({"today": 2, "gmp": 1})
+    response = build_command_responses("/mystats", [], 10, now=NOW, usage=stats)[0]
+    assert "Commands used: 3" in response
+    assert "/today: 2" in response
+
+
+def test_details_command_formats_verified_company_details() -> None:
+    candidate = ipo("Rentomojo")
+    candidate.details = IpoDetails(issue_size="Approx ₹1,255 Crores")
+
+    response = "\n".join(
+        build_command_responses("/details Rentomojo", [candidate], 10, now=NOW)
+    )
+
+    assert "Details: Rentomojo" in response
+    assert "Issue size Approx ₹1,255 Crores" in response
+    assert build_command_responses("/details", [candidate], 10, now=NOW) == [
+        "Usage: /details &lt;IPO_NAME&gt;"
+    ]
+
+
 def test_commands_escape_search_content_and_report_no_matches() -> None:
     unsafe = ipo("<script>IPO</script>")
     unsafe.url = "javascript:alert(1)"
@@ -266,14 +346,44 @@ def test_get_updates_rejects_invalid_result_payload(
         get_updates("fake-token")
 
 
+def test_set_my_commands_registers_telegram_command_menu(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    class Response:
+        status_code = 200
+
+        @staticmethod
+        def json() -> dict:
+            return {"ok": True, "result": True}
+
+    def fake_post(url, *, json, timeout):
+        captured.update(url=url, payload=json)
+        return Response()
+
+    monkeypatch.setattr("src.telegram_client.httpx.post", fake_post)
+    commands = [{"command": "live_sme", "description": "Show live SME IPOs"}]
+
+    set_my_commands("fake-token", commands)
+
+    assert captured["url"].endswith("/setMyCommands")
+    assert captured["payload"]["commands"] == commands
+
+
 def test_command_listener_replies_to_the_requesting_chat(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     poll_count = 0
     sent: list[tuple[str, str]] = []
+    registered_commands: list[dict[str, str]] = []
     monkeypatch.setattr("src.command_bot.load_bot_token", lambda: "fake-token")
     monkeypatch.setattr("src.command_bot.load_min_gain_pct", lambda: 10)
     monkeypatch.setattr("src.command_bot.scrape_market_data", lambda: [ipo("Strong IPO")])
+    monkeypatch.setattr(
+        "src.command_bot.set_my_commands",
+        lambda token, commands: registered_commands.extend(commands),
+    )
 
     class FixedDateTime:
         @staticmethod
@@ -307,3 +417,5 @@ def test_command_listener_replies_to_the_requesting_chat(
     assert len(sent) == 1
     assert sent[0][0] == "12345"
     assert "Strong IPO" in sent[0][1]
+    registered_names = {item["command"] for item in registered_commands}
+    assert {"live_sme", "ending_all_today", "listed_mainboard", "mystats"} <= registered_names
