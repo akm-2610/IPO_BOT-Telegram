@@ -101,10 +101,8 @@ def build_command_responses(
 
 
 def _send_responses(bot_token: str, chat_id: str, responses: list[str]) -> None:
-    logger.info("Chat ID: %s", chat_id)
     for response in responses:
-        result = send_message(bot_token, chat_id, response)
-        logger.info("Telegram result: %s", result)
+        send_message(bot_token, chat_id, response)
 
 
 def run() -> int:
@@ -120,7 +118,6 @@ def run() -> int:
     try:
         while True:
             for update in get_updates(bot_token, offset=offset):
-                logger.info("Received update: %s", update)
                 update_id = update.get("update_id")
                 if not isinstance(update_id, int):
                     raise TelegramError("Telegram update is missing a valid update_id")
@@ -160,9 +157,7 @@ def run() -> int:
                     continue
 
                 responses = build_command_responses(text, records, min_gain_pct)
-                logger.info("Responses: %s", responses)
                 _send_responses(bot_token, str(chat_id), responses)
-                logger.info("Sent successfully")
     except TelegramError as exc:
         logger.error("Telegram command listener failed: %s", exc)
         return 1
